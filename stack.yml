@@ -1,0 +1,268 @@
+version: "3.9"
+services:
+  orchestrator:
+    image: everpeace/curl-jq
+    configs:
+      - source: orchestrator
+        target: /bin/entrypoint.sh
+        mode: 0755
+    deploy:
+      replicas: 1
+    entrypoint: "/bin/entrypoint.sh"
+    networks:
+      - cockroach
+      - syncthing
+    secrets:
+      - source: admin_user
+        target: user
+        mode: 0444
+      - source: admin_password
+        target: password
+        mode: 0444
+      - source: apikey
+        target: apikey
+        mode: 0444
+    volumes:
+      - /srv:/srv
+  node-prep:
+    image: everpeace/curl-jq
+    configs:
+      - source: node-prep
+        target: /bin/entrypoint.sh
+        mode: 0755
+    deploy:
+      mode: global
+      restart_policy:
+        condition: none
+    entrypoint: "/bin/entrypoint.sh"
+    secrets:
+      - source: admin_user
+        target: user
+        mode: 0444
+      - source: admin_password
+        target: password
+        mode: 0444
+      - source: apikey
+        target: apikey
+        mode: 0444
+    volumes:
+      - /srv:/srv
+  
+  syncthing:
+    image: syncthing/syncthing
+    configs:
+      - source: syncthing
+        target: /bin/entrypoint.sh
+        mode: 0755
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.syncthing.tls=true"
+        - "traefik.http.routers.syncthing.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.syncthing.entrypoints=web-secured"
+        - "traefik.http.routers.syncthing.rule=Host(`syncthing.eclatech.net`)"
+        - "traefik.http.routers.syncthing.service=syncthing"
+        - "traefik.http.routers.syncthing.middlewares=authelia@docker"
+        - "traefik.http.services.syncthing.loadbalancer.server.port=8348"
+        - "traefik.http.services.syncthing.loadbalancer.sticky.cookie=true"
+        - "traefik.http.services.syncthing.loadbalancer.sticky.cookie.name=X-Traefik-Sticky"
+        - "traefik.http.services.syncthing.loadbalancer.sticky.cookie.secure=true"
+      mode: global
+    entrypoint: "/bin/entrypoint.sh"
+    networks:
+      - syncthing
+      - traefik
+    secrets:
+      - source: apikey
+        target: apikey
+        mode: 0444
+    volumes:
+      - /srv/default/cluster:/var/syncthing/Sync
+      - /srv/default/local/syncthing:/var/syncthing/config
+  syncthing-discovery:
+    image: syncthing/discosrv
+    command:
+      - "-http"
+    deploy:
+      replicas: 1
+    networks:
+      - syncthing
+  
+  cockroach:
+    image: everpeace/curl-jq
+    command:
+      - "--cache=.25"
+      - "--max-sql-memory=.25"
+      - "--logtostderr"
+    configs:
+      - source: cockroach
+        target: /bin/entrypoint.sh
+        mode: 0755
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.cockroach.tls=true"
+        - "traefik.http.routers.cockroach.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.cockroach.entrypoints=web-secured"
+        - "traefik.http.routers.cockroach.rule=Host(`cockroach.eclatech.net`)"
+        - "traefik.http.routers.cockroach.service=cockroach"
+        - "traefik.http.services.cockroach.loadbalancer.server.port=8080"
+        - "traefik.http.services.cockroach.loadbalancer.server.scheme=https"
+        - "traefik.http.services.cockroach.loadbalancer.sticky.cookie=true"
+        - "traefik.http.services.cockroach.loadbalancer.sticky.cookie.name=X-Traefik-Sticky"
+        - "traefik.http.services.cockroach.loadbalancer.sticky.cookie.secure=true"
+      mode: global
+    entrypoint: /bin/entrypoint.sh
+    environment:
+      MIN_SEEDS_COUNT: "3"
+    networks:
+      - cockroach
+      - traefik
+    volumes:
+      - "/srv/default/cluster/cockroach/cockroach:/bin/cockroach"
+      - "/srv/default/cluster/cockroach/certs/ca.crt:/certs/ca.crt"
+      - "/srv/default/cluster/cockroach/certs/ca.key:/certs/ca.key"
+      - "/srv/default/cluster/cockroach/certs/client.root.crt:/certs/client.root.crt"
+      - "/srv/default/cluster/cockroach/certs/client.root.key:/certs/client.root.key"
+      - "/srv/default/local/cockroach:/data"
+  
+  
+  httpbin:
+    image: kennethreitz/httpbin
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.httpbin.tls=true"
+        - "traefik.http.routers.httpbin.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.httpbin.entrypoints=web-secured"
+        - "traefik.http.routers.httpbin.rule=Host(`httpbin.eclatech.net`)"
+        - "traefik.http.routers.httpbin.service=httpbin"
+        - "traefik.http.routers.httpbin.middlewares=authelia@docker"
+        - "traefik.http.services.httpbin.loadbalancer.server.port=80"
+    networks:
+      - traefik
+
+  authelia:
+    image: authelia/authelia:latest
+    configs:
+      - source: authelia
+        target: /bin/entrypoint.sh
+        mode: 0755
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.authelia.tls=true"
+        - "traefik.http.routers.authelia.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.authelia.entrypoints=web-secured"
+        - "traefik.http.routers.authelia.rule=Host(`login.eclatech.net`)"
+        - "traefik.http.routers.authelia.service=authelia"
+        - "traefik.http.services.authelia.loadbalancer.server.port=9091"
+        - "traefik.http.middlewares.authelia.forwardauth.address=http://authelia:9091/api/verify?rd=https://login.eclatech.net/"
+        - "traefik.http.middlewares.authelia.forwardauth.trustForwardHeader=true"
+        - "traefik.http.middlewares.authelia.forwardauth.authResponseHeaders=Remote-User, Remote-Groups, Remote-Name, Remote-Email"
+    entrypoint: /bin/entrypoint.sh
+    environment:
+      DOMAIN: "eclatech.net"
+      TZ: "America/New_York"
+    networks:
+      - traefik
+    secrets:
+      - source: admin_user
+        target: user
+        mode: 0444
+      - source: admin_password
+        target: password
+        mode: 0444
+    volumes:
+      - /srv/default/cluster/authelia:/config
+
+  traefik:
+    image: traefik:latest
+    command:
+      - --api.insecure=true # set to 'false' on production
+      - --api.dashboard=true # see https://docs.traefik.io/v2.0/operations/dashboard/#secure-mode for how to secure the dashboard
+      - --providers.docker=true
+      - --providers.docker.swarmMode=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=traefik
+      - --entrypoints.web.address=:80
+      - --entrypoints.web-secured.address=:443
+      - --certificatesresolvers.letsencrypt.acme.email=isaac@eclatech.net
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.letsencrypt.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory
+      - --serversTransport.insecureSkipVerify=true
+    configs:
+      - source: traefik
+        target: /bin/entrypoint.sh
+        mode: 0755
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.dashboard.rule=Host(`traefik.eclatech.net`)"
+        - "traefik.http.routers.dashboard.service=api@internal" 
+        - "traefik.http.routers.dashboard.entrypoints=web-secured"
+        - "traefik.http.routers.dashboard.tls=true"
+        - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.dashboard.middlewares=authelia@docker"
+        - "traefik.http.middlewares.add-dashboard.addprefix.prefix=/dashboard"
+        - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+        - "traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true"
+        - "traefik.http.routers.http-catchall.rule=hostregexp(`{any:.+}`)" # global redirect to https
+        - "traefik.http.routers.http-catchall.entrypoints=web"
+        - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
+        - "traefik.http.services.traefik.loadbalancer.server.port=9999"
+    entrypoint: "/bin/entrypoint.sh"
+    networks:
+      - traefik
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - /srv/default/cluster/letsencrypt:/letsencrypt
+      - /var/run/docker.sock:/var/run/docker.sock
+
+configs:
+  authelia:
+    file: ./entrypoints/authelia.sh
+  cockroach:
+    file: ./entrypoints/cockroach.sh
+  node-prep:
+    file: ./entrypoints/node-prep.sh
+  orchestrator:
+    file: ./entrypoints/orchestrator.sh
+  syncthing:
+    file: ./entrypoints/syncthing.sh
+  traefik:
+    file: ./entrypoints/traefik.sh
+networks:
+  cockroach:
+    attachable: true
+    driver: overlay
+    driver_opts:
+      encrypted: "true"
+  host:
+    external: true
+  syncthing:
+    driver: overlay
+    driver_opts:
+      encrypted: "true"
+  traefik:
+    attachable: true
+    driver: overlay
+    driver_opts:
+      encrypted: "true"
+    name: traefik
+secrets:
+  admin_user:
+    external: true
+  admin_password:
+    external: true
+  apikey:
+    external: true
+
+#openssl rand -base64 1024 | tr -d "/+" | head -c8 | docker secret create admin_user -
+#openssl rand -base64 1024 | head -c16 | docker secret create admin_password -
+#openssl rand -base64 1024 | tr -d "/+" | head -c32 | docker secret create apikey -
